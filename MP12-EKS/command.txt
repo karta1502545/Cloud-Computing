@@ -1,0 +1,266 @@
+Note: karta1502545 is docker username
+
+1. open docker desktop
+
+2. download minikube from
+https://storage.googleapis.com/minikube/releases/latest/minikube-darwin-arm64
+
+3. run
+sudo install /Users/lee/Desktop/minikube-darwin-arm64 /usr/local/bin/minikube
+
+4. run
+minikube start
+# if fail, run: minikube delete, then run: minikube start
+
+5. download
+git clone https://github.com/UIUC-CS498-Cloud/MP12_PublicFiles.git
+
+--- build docker image ---
+1. run
+cd MP12_PublicFiles
+
+2. modify dockerfile
+docker build -t mp12_image .
+
+# run docker
+docker run -dp 127.0.0.1:5035:5035 mp12_image
+
+# check if it is running
+docker ps
+
+# check on docker desktop for model prediction outcome
+
+---
+# publish the image to dockerhub
+# login to dockerhub, and record your username
+# replace the username and run
+docker tag mp12_image karta1502545/mp12_image
+docker login
+docker push karta1502545/mp12_image
+# see if the image is published on dockerhub
+
+---
+1. create IAM policy and role 
+# IMPORTANT: ALL ROLES IN THE POST ARE NEEDED.
+# EKSClusterPolicy, EKSServicePolicy, EKSWorkerNodePolicy, SSMFullAccess, CloudFormationFullAccess, create and apply the customized role in the github link
+# https://github.com/eksctl-io/eksctl/issues/204#issuecomment-450450945
+
+2. create EC2 instance (ubuntu + default(0.0.0.0 for security group) + t2.medium + IAM role you have just created)
+# enter into the EC2 instance and install awscli
+sudo apt update
+sudo apt install python3-pip
+snap install aws-cli --classic
+aws --version
+
+# configure aws role
+# get access key from the security credentials (In the navigation bar on the upper right, choose your user name, and then choose Security credentials.)
+1. run
+aws configure
+(us-east-1 json)
+
+2. install eksctl
+RUN:
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+sudo mv /tmp/eksctl /usr/local/bin
+eksctl version
+
+Ref: https://docs.aws.amazon.com/emr/latest/EMR-on-EKS-DevelopmentGuide/setting-up-eksctl.html
+
+3. create config file
+touch eks-cluster.yaml
+vim eks-cluster.yaml
+--start--
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: mp12-cluster
+  region: us-east-1
+
+availabilityZones:
+  - us-east-1a
+  - us-east-1b
+
+nodeGroups:
+  - name: ng-1
+    instanceType: t2.medium
+    desiredCapacity: 2
+    privateNetworking: true
+
+--end--
+
+4. install kubectl
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl.sha256"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+kubectl version --client
+
+Ref: https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/
+
+5. install docker
+5-1
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove $pkg; done
+5-2
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+5-3
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+5-4 check if docker is installed successfully
+sudo docker run hello-world
+5-5 grant permission of docker to the EC2 instance
+sudo chown ubuntu:docker /var/run/docker.sock
+5-6 start docker deamon
+sudo systemctl start docker
+5-7 check if it is started
+sudo systemctl status docker
+
+5-8 search your image file
+docker search karta1502545/mp12_image
+5-9 pull from web
+docker pull karta1502545/mp12_image
+5-10 check if it is downloaded
+docker images
+
+Ref: https://docs.docker.com/engine/install/ubuntu/
+
+6. create cluster (this can take up to 20 min)
+eksctl create cluster -f eks-cluster.yaml
+
+7. create jobs
+7-1.
+touch free-job.yaml
+vim free-job.yaml
+--start--
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: # leave it blank
+  generateName: free-job-
+  namespace: free-service
+spec:
+  template:
+    spec:
+      containers:
+      - name: free-container
+        image: karta1502545/mp12_image:latest  # modify username
+        resources:
+          requests:
+            cpu: "0.9"
+          limits:
+            cpu: "0.9"
+        env:
+        - name: DATASET
+          value: mnist
+        - name: TYPE
+          value: ff
+      restartPolicy: Never
+--end
+7-2.
+touch premium-job.yaml
+vim premium-job.yaml
+--start--
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: # leave it blank
+  generateName: premium-job-
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+      - name: premium-container
+        image: karta1502545/mp12_image:latest # modify username
+        resources:
+          requests:
+            cpu: "0.9"
+          limits:
+            cpu: "0.9"
+        env:
+        - name: DATASET
+          value: mnist
+        - name: TYPE
+          value: cnn
+      restartPolicy: Never
+--end--
+
+8. 
+8-1. create namespace 'free-service' on cluster using k8s
+kubectl config current-context
+kubectl create namespace free-service
+kubectl get namespaces
+
+
+8-2. add pod constraint to 'free-service'
+8-2-1. create yaml file
+vim ResourceQuota.yaml
+--start--
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: free-service-quota
+  namespace: free-service
+spec:
+  hard:
+    requests.cpu: "0.9" # customized param
+    limits.cpu: "2"
+--end--
+
+8-2-2. apply rule in the cluster
+kubectl apply -f ResourceQuota.yaml
+
+9. create free-job for testing
+kubectl apply -f free-job.yaml
+# monitering
+kubectl get jobs -n free-service
+kubectl describe job free-job -n free-service
+# delete job after completion !!
+kubectl delete job free-job -n free-service
+
+10. test api
+upload server.py onto AWS EC2
+# EC2
+sudo apt install python-flask
+sudo apt install python-kubernetes
+python3 server.py
+# (debug) use postman to test on the 3 api
+
+# local
+python3 test.py 
+
+# if test.py failed, delete then test.py again
+kubuctl delete --all all --namespace=free-service
+kubuctl delete --all all --namespace=default
+python3 server.py
+python3 test.py
+
+11. delete all things
+
+
+
+--done--
+
+
+Note: 
+1. upload job yaml
+https://campuswire.com/c/G8B7D15E6/feed/1842
+
+(for grading purpose)
+- sleep a while before return 
+- limit request.cpu in free-tier to 0.9
+
+
+TODO:
+don't know how to return the response of read_status function correctly, now return 404
+

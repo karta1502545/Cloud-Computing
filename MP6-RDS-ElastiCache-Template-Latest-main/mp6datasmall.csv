@@ -1,0 +1,11 @@
+id,name,hero,power,xp,color
+1,irondoctor,no,eat,1000000,yellow
+2,windhero,no,grow,999999,yellow
+3,dogwoman,maybe,steal,999998,pink
+4,firechampion,no,jump,999997,blue
+5,dogchampion,no,think,999996,white
+6,dogman,yes,hide,999995,black
+7,icehero,yes,fight,999994,pink
+8,ironhero,yes,hide,999993,yellow
+9,firehero,yes,jump,999992,grey
+10,dogchampion,no,hide,999991,green
